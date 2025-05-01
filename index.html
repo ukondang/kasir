@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Aplikasi Kasir</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#3b82f6">
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: monospace; margin: 0; background: #f9f9f9; }
+    header { background: #3b82f6; color: white; padding: 1rem; text-align: center; position: relative; }
+    #hamburger { position: absolute; left: 10rem; top: 1rem; font-size: 1.5rem; background: none; border: none; color: white; cursor: pointer; }
+    .sidebar { height: 100%; width: 0; position: fixed; z-index: 10; top: 0; left: 0; background: #3b82f6; overflow-x: hidden; transition: 0.3s; padding-top: 60px; }
+    .sidebar a { padding: 12px 20px; display: block; color: white; text-decoration: none; }
+    .sidebar a:hover { background: #2563eb; }
+    .main { padding: 1rem; }
+    input, button, select { width: 100%; padding: 0.6rem; margin: 0.5rem 0; border-radius: 5px; border: 1px solid #ccc; }
+    table { width: 100%; margin-top: 1rem; border-collapse: collapse; }
+    table th, table td { border: 1px solid #ddd; padding: 0.5rem; text-align: center; }
+    .checkout { background: #e2e8f0; padding: 1rem; margin-top: 1rem; }
+    .btn-edit { margin-left: 5px; background-color: #facc15; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+    video { width: 100%; max-height: 300px; margin: 10px 0; display: none; }
+    #detailModal { display: none; position: fixed; z-index: 20; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); }
+    #detailContent { background: #fff; margin: 10% auto; padding: 20px; width: 90%; max-width: 400px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div id="mySidebar" class="sidebar">
+    <a href="#" onclick="showPage('tambah')">Tambah Barang</a>
+    <a href="#" onclick="showPage('kasir')">Kasir</a>
+    <a href="#" onclick="showPage('daftar')">Daftar Barang</a>
+    <a href="#" onclick="showPage('riwayat')">Riwayat Transaksi</a>
+  </div>
+  <header>
+    <button id="hamburger" onclick="toggleSidebar()">☰</button>
+    <h1>ARSUGA</h1>
+  </header>
+  <div class="main">
+    <!-- Halaman Tambah Barang -->
+    <div id="tambahPage">
+      <h2>Tambah Barang</h2>
+      <button onclick="startScan('barcode')">Scan Barcode</button>
+      <video id="previewTambah"></video>
+      <input type="text" id="barcode" placeholder="Barcode Barang">
+      <input type="text" id="nama" placeholder="Nama Barang">
+      <input type="number" id="harga" placeholder="Harga">
+      <input type="number" id="stok" placeholder="Stok">
+      <button onclick="tambahBarang()">Simpan Barang</button>
+    </div>
+
+    <!-- Halaman Kasir -->
+    <div id="kasirPage" style="display:none;">
+      <h2>Transaksi</h2>
+      <button onclick="startScan('scanTransaksi')">Scan Barcode</button>
+      <video id="previewKasir"></video>
+      <input type="text" id="scanTransaksi" placeholder="Scan/Ketik Kode Barang">
+      <table id="tabelTransaksi">
+        <thead><tr><th>Barang</th><th>Harga</th><th>Jumlah</th><th>Aksi</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="checkout">
+        <p>Total: <span id="total">0</span></p>
+        <input type="number" id="bayar" placeholder="Jumlah Bayar" oninput="hitungKembalian()">
+        <p>Kembalian: <span id="kembalian">0</span></p>
+        <button onclick="simpanTransaksiDanDownloadStruk()">Simpan & Download Struk</button>
+      </div>
+    </div>
+
+    <!-- Halaman Daftar Barang -->
+    <div id="daftarPage" style="display:none;">
+      <h2>Daftar Barang</h2>
+      <table id="tabelBarang">
+        <thead><tr><th>Barcode</th><th>Nama</th><th>Harga</th><th>Stok</th><th>Aksi</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Halaman Riwayat Transaksi -->
+    <div id="riwayatPage" style="display:none;">
+      <h2>Riwayat Transaksi</h2>
+      <p>Total Pendapatan: <span id="totalPendapatan">0</span></p>
+      <table id="tabelRiwayat">
+        <thead><tr><th>Waktu</th><th>Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Modal Detail Transaksi -->
+  <div id="detailModal">
+    <div id="detailContent">
+      <h3>Detail Transaksi</h3>
+      <div id="detailIsi"></div>
+      <button onclick="downloadUlangStruk()">Download Struk</button>
+      <button onclick="document.getElementById('detailModal').style.display='none'">Tutup</button>
+    </div>
+  </div>
+
+  <script>
+    const barangList = JSON.parse(localStorage.getItem('barangList') || '{}');
+    let riwayatTransaksi = JSON.parse(localStorage.getItem('riwayatTransaksi') || '[]');
+    let transaksi = [];
+    let transaksiTerpilih = null;
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById("mySidebar");
+      sidebar.style.width = sidebar.style.width === "200px" ? "0" : "200px";
+    }
+
+    function showPage(page) {
+      ['tambahPage', 'kasirPage', 'daftarPage', 'riwayatPage'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+      });
+      document.getElementById('previewTambah').style.display = 'none';
+      document.getElementById('previewKasir').style.display = 'none';
+      document.getElementById(page + 'Page').style.display = 'block';
+      if (page === 'daftar') renderDaftarBarang();
+      if (page === 'riwayat') renderRiwayat();
+    }
+
+    function tambahBarang() {
+      const barcode = document.getElementById('barcode').value.trim();
+      const nama = document.getElementById('nama').value.trim();
+      const harga = parseFloat(document.getElementById('harga').value);
+      const stok = parseInt(document.getElementById('stok').value);
+      if (barcode && nama && harga >= 0 && stok >= 0) {
+        barangList[barcode] = { nama, harga, stok };
+        localStorage.setItem('barangList', JSON.stringify(barangList));
+        alert('Barang disimpan!');
+        ['barcode', 'nama', 'harga', 'stok'].forEach(id => document.getElementById(id).value = '');
+      }
+    }
+
+    function startScan(targetInputId) {
+      const codeReader = new ZXing.BrowserBarcodeReader();
+      const previewElem = targetInputId === 'scanTransaksi' ? document.getElementById('previewKasir') : document.getElementById('previewTambah');
+      previewElem.style.display = 'block';
+      codeReader.decodeOnceFromVideoDevice(undefined, previewElem.id).then(result => {
+        document.getElementById(targetInputId).value = result.text;
+        if (targetInputId === 'scanTransaksi') tambahKeTransaksi(result.text);
+        previewElem.style.display = 'none';
+        codeReader.reset();
+      }).catch(err => {
+        alert('Gagal memindai barcode: ' + err);
+        previewElem.style.display = 'none';
+      });
+    }
+
+    function tambahKeTransaksi(kode) {
+      if (barangList[kode]) {
+        const item = transaksi.find(t => t.kode === kode);
+        if (item) item.jumlah++;
+        else transaksi.push({ kode, nama: barangList[kode].nama, harga: barangList[kode].harga, jumlah: 1 });
+        renderTransaksi();
+      } else alert('Barang tidak ditemukan');
+    }
+
+    document.getElementById('scanTransaksi').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        tambahKeTransaksi(this.value.trim());
+        this.value = '';
+      }
+    });
+
+    function renderTransaksi() {
+      const tbody = document.querySelector('#tabelTransaksi tbody');
+      tbody.innerHTML = '';
+      let total = 0;
+      transaksi.forEach((t, i) => {
+        total += t.harga * t.jumlah;
+        tbody.innerHTML += `<tr><td>${t.nama}</td><td>${t.harga}</td><td>${t.jumlah}</td><td><button onclick='ubahJumlah(${i},1)'>+</button><button onclick='ubahJumlah(${i},-1)'>-</button></td></tr>`;
+      });
+      document.getElementById('total').innerText = total;
+    }
+
+    function ubahJumlah(index, delta) {
+      transaksi[index].jumlah += delta;
+      if (transaksi[index].jumlah <= 0) transaksi.splice(index, 1);
+      renderTransaksi();
+    }
+
+    function hitungKembalian() {
+      const bayar = parseFloat(document.getElementById('bayar').value);
+      const total = parseFloat(document.getElementById('total').innerText);
+      const kembalian = bayar - total;
+      document.getElementById('kembalian').innerText = kembalian >= 0 ? kembalian : 0;
+    }
+
+    function simpanTransaksiDanDownloadStruk() {
+      const total = parseFloat(document.getElementById('total').innerText);
+      const waktu = new Date().toLocaleString();
+      const salinan = transaksi.map(t => ({ ...t }));
+
+      salinan.forEach(t => {
+        if (barangList[t.kode]) barangList[t.kode].stok -= t.jumlah;
+      });
+      localStorage.setItem('barangList', JSON.stringify(barangList));
+
+      const data = { waktu, total, items: salinan };
+      riwayatTransaksi.push(data);
+      localStorage.setItem('riwayatTransaksi', JSON.stringify(riwayatTransaksi));
+      downloadStruk(data);
+
+      transaksi = [];
+      renderTransaksi();
+      document.getElementById('bayar').value = '';
+      document.getElementById('kembalian').innerText = '0';
+    }
+
+    function downloadStruk(data) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "mm", format: [80, 80 + data.items.length * 8] });
+      let y = 10;
+      doc.setFont("courier", "normal");
+      doc.setFontSize(10);
+      doc.text("TOKO ARSUGA", 2, y); y += 6;
+      doc.text("====================", 2, y); y += 6;
+      data.items.forEach(t => {
+        doc.text(`${t.nama}`, 2, y); y += 4;
+        doc.text(`${t.jumlah} x ${t.harga} = ${t.jumlah * t.harga}`, 2, y); y += 5;
+      });
+      doc.text("====================", 2, y); y += 6;
+      doc.text(`TOTAL: ${data.total}`, 2, y); y += 5;
+      doc.text(`Waktu: ${data.waktu}`, 2, y); y += 5;
+      doc.text("Terima kasih!", 2, y);
+      doc.save("struk.pdf");
+    }
+
+    function renderDaftarBarang() {
+      const tbody = document.querySelector('#tabelBarang tbody');
+      tbody.innerHTML = '';
+      Object.keys(barangList).forEach(barcode => {
+        const b = barangList[barcode];
+        tbody.innerHTML += `<tr><td>${barcode}</td><td>${b.nama}</td><td><input type='number' value='${b.harga}' onchange='updateHarga("${barcode}", this.value)'></td><td>${b.stok}</td><td><button onclick='hapusBarang("${barcode}")'>Hapus</button><button class="btn-edit" onclick='tampilkanFormEditStok("${barcode}")'>Edit Stok</button></td></tr>`;
+      });
+    }
+
+    function updateHarga(barcode, newHarga) {
+      if (barangList[barcode]) {
+        barangList[barcode].harga = parseFloat(newHarga);
+        localStorage.setItem('barangList', JSON.stringify(barangList));
+      }
+    }
+
+    function tampilkanFormEditStok(barcode) {
+      const stokBaru = prompt("Masukkan stok baru:", barangList[barcode].stok);
+      if (stokBaru !== null && !isNaN(stokBaru)) {
+        barangList[barcode].stok = parseInt(stokBaru);
+        localStorage.setItem('barangList', JSON.stringify(barangList));
+        renderDaftarBarang();
+      }
+    }
+
+    function hapusBarang(barcode) {
+      if (confirm('Yakin hapus barang ini?')) {
+        delete barangList[barcode];
+        localStorage.setItem('barangList', JSON.stringify(barangList));
+        renderDaftarBarang();
+      }
+    }
+
+    function renderRiwayat() {
+      const tbody = document.querySelector('#tabelRiwayat tbody');
+      let totalPendapatan = 0;
+      tbody.innerHTML = '';
+      riwayatTransaksi.forEach((r, i) => {
+        tbody.innerHTML += `<tr onclick="lihatDetail(${i})" style="cursor:pointer;"><td>${r.waktu}</td><td>${r.total}</td></tr>`;
+        totalPendapatan += r.total;
+      });
+      document.getElementById('totalPendapatan').innerText = totalPendapatan;
+    }
+
+    function lihatDetail(index) {
+      transaksiTerpilih = riwayatTransaksi[index];
+      let html = '';
+      transaksiTerpilih.items.forEach(t => {
+        html += `${t.nama} (${t.jumlah} x ${t.harga}) = ${t.jumlah * t.harga}<br>`;
+      });
+      html += `<hr><strong>Total: ${transaksiTerpilih.total}</strong><br><small>${transaksiTerpilih.waktu}</small>`;
+      document.getElementById('detailIsi').innerHTML = html;
+      document.getElementById('detailModal').style.display = 'block';
+    }
+
+    function downloadUlangStruk() {
+      if (transaksiTerpilih) downloadStruk(transaksiTerpilih);
+    }
+
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then(() => {
+        console.log("Service Worker terdaftar");
+      }).catch(err => {
+        console.log("Service Worker gagal:", err);
+      });
+    });
+  }
+  </script>
+</body>
+</html>
